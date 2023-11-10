@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+    
+    tools{
+        jdk 'jdk17'
+        nodejs 'node16'
+    }
+    environment {
+        SCANNER_HOME= tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('clean workspace') {
+            steps {
+                cleanWs ()
+            }
+        }
+         stage('git checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Basavaraj852/Zomato-Clone.git'
+            }
+        }
+        stage('sonarqube-analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=zomato \
+                    -Dsonar.projectKey=zomato '''
+                }
+            }
+        }
+        stage('quality gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
+                }
+            }
+        }
+        stage('install dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+        stage('Dependency check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage('TRIVY FS SCAN') {
+            steps {
+                sh "trivy fs ."
+            }
+        }
+        stage("Docker Build & Push"){
+            steps{
+                script{
+                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){   
+                       sh "docker build -t zomato ."
+                       sh "docker tag zomato basavaraj852/zomato:latest "
+                       sh "docker push basavaraj852/zomato:latest "
+                    }
+                }
+            }
+        }
+        stage("TRIVY"){
+            steps{
+                sh "trivy image basavaraj852/zomato:latest > trivy.txt" 
+            }
+        }
+        stage('Deploy to container'){
+     steps{
+            sh 'docker run -d --name zomato -p 3000:3000 basavaraj852/zomato:latest'
+          }
+      }
+    }
+}
